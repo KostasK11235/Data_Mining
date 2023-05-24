@@ -9,7 +9,7 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 # read data file
 df = pd.read_csv('data.csv')
 
-df['Data'] = pd.to_datetime(df['Date'])
+df['Date'] = pd.to_datetime(df['Date'])
 dates = df.groupby('Date').size()
 unique_countries = df['Entity'].unique()
 
