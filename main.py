@@ -10,7 +10,10 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 # read data file
 df = pd.read_csv('data.csv')
 
+<<<<<<< HEAD
 # get the non common dates and remove them from the dataframe
+=======
+>>>>>>> efe47bc16a0bcbf1d6ba9a08c968af2917280409
 df['Date'] = pd.to_datetime(df['Date'])
 dates = df.groupby('Date').size()
 unique_countries = df['Entity'].unique()
@@ -60,6 +63,7 @@ for country_name in countries_to_remove:
     df_filtered = df_filtered.drop(df_filtered.loc[df['Entity'] == country_name].index)
 
 print("Number of null values in each column: ")
+<<<<<<< HEAD
 print(df_filtered.isnull().sum())
 
 # df_filtered.to_csv('clean_data.csv', index=False)
@@ -78,3 +82,6 @@ df_filtered.to_csv('interpolated_data.csv', index=False)
 print("Number of null values in each column: ")
 print(df_filtered.isnull().sum())
 
+=======
+print(df.isnull().sum())
+>>>>>>> efe47bc16a0bcbf1d6ba9a08c968af2917280409
