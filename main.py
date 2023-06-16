@@ -1,14 +1,14 @@
 import pandas as pd
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-
-import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy.stats import zscore
-from matplotlib import cm
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
-
+import tensorflow as tf
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, mean_squared_error
+from imblearn.over_sampling import SMOTE
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.svm import SVR
+from mpl_toolkits.mplot3d import Axes3D
+import numpy as np
 
 # read data file
 df = pd.read_csv('data.csv')
@@ -26,7 +26,6 @@ for i in range(0, len(dates)):
 print(outdates)
 mask = df['Date'].isin(outdates)
 df_filtered = df[~mask]
-
 print(df_filtered.info())
 
 # get the number of null values in each column
@@ -75,9 +74,10 @@ groups = df_filtered.groupby('Entity')
 df_filtered[['Daily tests', 'Cases', 'Deaths']] = df_filtered[['Daily tests', 'Cases', 'Deaths']].interpolate(method='linear', limit_direction='forward')
 df_filtered[['Daily tests', 'Cases', 'Deaths']] = df_filtered[['Daily tests', 'Cases', 'Deaths']].round()
 
+
 # df_filtered['Cases'] = df_filtered['Cases'].interpolate(method='')
 # df_filtered.to_csv('interpolated_data.csv', index=False)
-
+# min-max scaling to data
 grouped_data = df_filtered.groupby('Entity')
 country_Hospital_beds_per1000 = grouped_data['Hospital beds per 1000 people'].first()
 country_doctors_per1000 = grouped_data['Medical doctors per 1000 people'].first()
@@ -98,19 +98,103 @@ doctors_cases = country_doctors/country_total_cases
 # get all percentages in a single Dataframe
 concatenated_percentages = pd.concat([positivity_rate, death_rate, cases_population, beds_cases, doctors_cases], axis=1)
 
-# start clustering and evaluate number of clusters
-max_k = 10
+# print("Percentages: \n", concatenated_percentages)
+print(concatenated_percentages.shape)
+# print(type(concatenated_percentages))
+
+X = concatenated_percentages.iloc[:, :5]
+y = concatenated_percentages.index
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+minmax = MinMaxScaler()
+X_minmax = minmax.fit_transform(X_scaled)
+
+oversample = SMOTE()
+X_oversampled, y_oversampled = oversample.fit_resample(X_minmax, y)
+
+# print(X_oversampled)
 best_score = -1
 best_k = -1
 
-for k in range(2, max_k+1):
-    k_means = KMeans(n_clusters=k, n_init=10)
-    labels = k_means.fit_predict(concatenated_percentages)
-    score = silhouette_score(concatenated_percentages, labels)
-    print("#k: ", k, "score: ", score)
+for k in range(2, 10):
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    labels = kmeans.fit_predict(X_oversampled)
+    score = silhouette_score(X_oversampled, labels)
+    print("score: ", score, ", k=", k)
     if score > best_score:
         best_score = score
         best_k = k
 
-print("optimal k: ", best_k)
-print("Silhouette score: ", best_score)
+print("best k", best_k)
+kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
+labels = kmeans.fit_predict(X_oversampled)
+
+print(labels)
+concatenated_percentages['Cluster'] = labels
+cluster_groups = concatenated_percentages.groupby('Cluster')
+print(concatenated_percentages)
+for name, group in cluster_groups:
+    print("Group:", name)
+    print(group)
+    print("\n")
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(concatenated_percentages[0],concatenated_percentages[1], concatenated_percentages[2], c=labels)
+
+# Set labels for each axis
+ax.set_xlabel('positivity_rate')
+ax.set_ylabel('death_rate')
+ax.set_zlabel('cases_population')
+# Show the 3D plot
+plt.show()
+
+# SVM regressor
+df_filtered = df_filtered.loc[df_filtered['Entity'] == 'Greece'].copy()
+df_filtered.loc[:, 'positivity_rate'] = df_filtered['Cases']/df_filtered['Daily tests']
+print(df_filtered)
+df_filtered['Swifted positivity rate'] = df_filtered['positivity_rate'].shift(-3)
+
+df_filtered['Swifted positivity rate'] = df_filtered['Swifted positivity rate'].interpolate(method='linear', limit_direction='forward')
+df_filtered['Swifted positivity rate'] = df_filtered['Swifted positivity rate'].round()
+
+columns_to_scale = ['Latitude', 'Longitude', 'Average temperature per year', 'Hospital beds per 1000 people',
+                    'Medical doctors per 1000 people', 'GDP/Capita', 'Population', 'Median age', 'Population aged 65 and over (%)',
+                    'Daily tests', 'Cases', 'Deaths', 'Swifted positivity rate']
+df_filtered[columns_to_scale] = scaler.fit_transform(df_filtered[columns_to_scale])
+df_filtered[columns_to_scale] = minmax.fit_transform(df_filtered[columns_to_scale])
+
+plt.plot(df_filtered['Date'], df_filtered['Swifted positivity rate'])
+plt.xlabel('Date')
+plt.ylabel('Positivity rate')
+plt.show()
+
+# split the df_filtered into dates before and after 01-01-2021
+train_data = df_filtered[df_filtered['Date'] < '2021-01-01'].copy()
+test_data = df_filtered[df_filtered['Date'] >= '2021-01-01'].copy()
+
+X_train = train_data[['Hospital beds per 1000 people', 'Medical doctors per 1000 people', 'Population', 'Median age',
+                      'Daily tests', 'Cases', 'Deaths']]
+y_train = train_data['Swifted positivity rate']
+
+X_eval = test_data[['Hospital beds per 1000 people', 'Medical doctors per 1000 people', 'Population', 'Median age',
+                    'Daily tests', 'Cases', 'Deaths']]
+y_eval = test_data['Swifted positivity rate']
+
+print("Size ", X_train.shape, y_train.shape)
+# train the SVM regressor
+svm_regressor = SVR(kernel='rbf')
+svm_regressor.fit(X_train, y_train)
+
+# make predictions
+predictions = svm_regressor.predict(X_eval)
+print("predictions: ", predictions)
+print("true values: ", y_eval)
+# evaluate the model
+mse = mean_squared_error(y_eval, predictions)
+print("Mean Squared Error: ", mse)
+
+plt.scatter(X_train, y_train, color='magenta')
+plt.plot(X_train, svm_regressor.predict(X_train), color='green')
+plt.show()
