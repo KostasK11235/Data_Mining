@@ -5,7 +5,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, mean_squared_error
 from imblearn.over_sampling import SMOTE
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.svm import SVR
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
@@ -139,16 +139,6 @@ for name, group in cluster_groups:
     print(group)
     print("\n")
 
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-ax.scatter(concatenated_percentages[0],concatenated_percentages[1], concatenated_percentages[2], c=labels)
-
-# Set labels for each axis
-ax.set_xlabel('positivity_rate')
-ax.set_ylabel('death_rate')
-ax.set_zlabel('cases_population')
-# Show the 3D plot
-plt.show()
 
 # SVM regressor
 df_filtered = df_filtered.loc[df_filtered['Entity'] == 'Greece'].copy()
@@ -165,10 +155,6 @@ columns_to_scale = ['Latitude', 'Longitude', 'Average temperature per year', 'Ho
 df_filtered[columns_to_scale] = scaler.fit_transform(df_filtered[columns_to_scale])
 df_filtered[columns_to_scale] = minmax.fit_transform(df_filtered[columns_to_scale])
 
-plt.plot(df_filtered['Date'], df_filtered['Swifted positivity rate'])
-plt.xlabel('Date')
-plt.ylabel('Positivity rate')
-plt.show()
 
 # split the df_filtered into dates before and after 01-01-2021
 train_data = df_filtered[df_filtered['Date'] < '2021-01-01'].copy()
@@ -182,19 +168,51 @@ X_eval = test_data[['Hospital beds per 1000 people', 'Medical doctors per 1000 p
                     'Daily tests', 'Cases', 'Deaths']]
 y_eval = test_data['Swifted positivity rate']
 
-print("Size ", X_train.shape, y_train.shape)
-# train the SVM regressor
-svm_regressor = SVR(kernel='rbf')
-svm_regressor.fit(X_train, y_train)
 
+# create and train the SVM regressor
+svm_regressor = SVR()
+
+param_grid = {
+    'kernel': ['linear', 'rbf'],
+    'C': [0.1, 1, 10],
+    'gamma': ['scale', 'auto']
+}
+
+# create the grid search object
+grid_search = GridSearchCV(svm_regressor, param_grid, scoring='neg_mean_squared_error', cv=5)
+
+# fit the grid search to the training data
+grid_search.fit(X_train, y_train)
+
+# get the best hyperparameters
+best_params = grid_search.best_params_
+print("Best hyperparameters: ", best_params)
+
+# get the best model
+# best_model = grid_search.best_estimator_
 # make predictions
-predictions = svm_regressor.predict(X_eval)
-print("predictions: ", predictions)
-print("true values: ", y_eval)
-# evaluate the model
-mse = mean_squared_error(y_eval, predictions)
-print("Mean Squared Error: ", mse)
+# predictions = best_model.predict(X_eval)
 
-plt.scatter(X_train, y_train, color='magenta')
-plt.plot(X_train, svm_regressor.predict(X_train), color='green')
-plt.show()
+best_svm_regressor = SVR(**best_params)
+best_svm_regressor.fit(X_train, y_train)
+
+y_pred = []
+for i in range(len(X_eval)):
+    # make predictions for a sample
+    X_sample = X_eval.iloc[[i]].values.reshape(1, -1)
+    y_sample = y_eval.iloc[i]
+    y_pred.append(best_svm_regressor.predict(X_sample))
+
+    # add the predicted sample to the training set
+    X_train = X_train.append(X_eval.loc[i], ignore_index=False)
+    y_train = y_train.append(y_eval.loc[i], ignore_index=False)
+
+    # retrain the SVM regressor
+    best_svm_regressor.fit(X_train, y_train)
+
+print("predictions: ", y_pred)
+print("true values: ", y_eval)
+
+# evaluate the model
+mse = mean_squared_error(y_eval, y_pred)
+print("Mean Squared Error: ", mse)
