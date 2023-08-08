@@ -1,218 +1,292 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import tensorflow as tf
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score, mean_squared_error
-from imblearn.over_sampling import SMOTE
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.svm import SVR
-from mpl_toolkits.mplot3d import Axes3D
+import seaborn as sns
 import numpy as np
+from sklearn.preprocessing import RobustScaler, MinMaxScaler
+from sklearn.neighbors import NearestNeighbors
+from sklearn.metrics import silhouette_score
+from sklearn.cluster import DBSCAN
 
 # read data file
 df = pd.read_csv('data.csv')
 
-# get the non common dates and remove them from the dataframe
+# print info about the data
+print(df.info())
+print(df.describe())
+
+# Plot the distributions of the features in a histogram showing the frequency of values within different ranges (bins)
+df.hist(bins=30, figsize=(12, 12))
+plt.tight_layout()
+plt.show()
+
+# Plot a heatmap for the columns of the dataframe
+# We drop columns Entity,Continent and date because they are not numeric
+heatmap_df = df.drop(columns=['Entity', 'Continent', 'Date'])
+corr_matrix = heatmap_df.corr().round(5)
+
+plt.figure()
+sns.heatmap(corr_matrix, annot=True)
+plt.title("Dataframe Heatmap")
+plt.tight_layout()
+plt.show()
+
+# Plot the box-plots for the dataframe
+# Calculate total_tests, total_cases, and total_deaths for each country
+# Then box-plot the total tests, cases and deaths for all the countries to see the distribution of them
+# and find the countries with outlier data
+countries_groups = df.groupby("Entity").agg({
+    "Daily tests": "sum",
+    "Cases": lambda x: x.dropna().iloc[-1],
+    "Deaths": lambda x: x.dropna().iloc[-1]
+}).reset_index()
+
+print("Countries groups: ", countries_groups)
+
+# Create a boxplot to showcase the distribution of the data
+fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(10, 6))
+
+# Boxplot for Total Tests
+tests = axes[0].boxplot(countries_groups["Daily tests"])
+axes[0].set_yscale('log')
+axes[0].set_ylabel('Total Tests')
+axes[0].set_title('Total Tests Boxplot Diagram')
+axes[0].set_xticks([])
+
+# Boxplot for Total Cases
+cases = axes[1].boxplot(countries_groups["Cases"])
+axes[1].set_yscale('log')
+axes[1].set_ylabel('Total Cases')
+axes[1].set_title('Total Cases Boxplot Diagram')
+axes[1].set_xticks([])
+
+# Boxplot for Total Deaths
+deaths = axes[2].boxplot(countries_groups["Deaths"])
+axes[2].set_yscale('log')
+axes[2].set_ylabel('Total Deaths')
+axes[2].set_title('Total Deaths Boxplot Diagram')
+axes[2].set_xticks([])
+plt.tight_layout()
+plt.show()
+
+# Find and display the outliers(fliers)
+tests_outliers = tests["fliers"][0].get_ydata()
+cases_outliers = cases["fliers"][0].get_ydata()
+deaths_outliers = deaths["fliers"][0].get_ydata()
+
+outliers_countries_tests = countries_groups[countries_groups["Daily tests"].isin(tests_outliers)]["Entity"].tolist()
+outliers_countries_cases = countries_groups[countries_groups["Cases"].isin(cases_outliers)]["Entity"].tolist()
+outliers_countries_deaths = countries_groups[countries_groups["Deaths"].isin(deaths_outliers)]["Entity"].tolist()
+
+print("Tests Outliers Countries:", outliers_countries_tests)
+print("Cases Outliers Countries:", outliers_countries_cases)
+print("Deaths Outliers Countries:", outliers_countries_deaths)
+
+# See if there are non common dates among the countries
 df['Date'] = pd.to_datetime(df['Date'])
-dates = df.groupby('Date').size()
+date_groups = df.groupby('Date').size()
 unique_countries = df['Entity'].unique()
 
-outdates = []
-for i in range(0, len(dates)):
-    if dates.values[i] < len(unique_countries):
-        outdates.append(dates.index[i])
+print("Number of unique countries: ", unique_countries.size)
+print("Number of countries in each date group:\n", date_groups)
 
-print(outdates)
-mask = df['Date'].isin(outdates)
-df_filtered = df[~mask]
-print(df_filtered.info())
+# Plot the number of times each date appears in the dataset
+plt.figure()
+date_groups.plot(kind='line')
+plt.xlabel('Ordered Dates')
+plt.ylabel('Number of appearances')
+plt.tight_layout()
+plt.show()
 
-# get the number of null values in each column
-print("Number of null values in each column: ")
-print(df_filtered.isnull().sum())
+# *******************************************************************************************************************
+# Preprocessing
 
-# Describe values for each column: number of values, min, max, mean, standard deviation, Q1, Q2 and Q3 quartiles
-print("Describe: \n", df_filtered.describe().round(3).to_string())
-
-# We set the criteria for a country to have poor data, we find those countries and remove them from the dataframe
-rows_per_country = df_filtered.groupby('Entity').size()
-print(rows_per_country.values)
-
-nulls_per_country = df_filtered.groupby('Entity').apply(lambda x: x.isnull().sum())
-print(nulls_per_country)
+# Removing the countries with insufficient data
+# Find the number of rows in each country and then the number of null values in each country's columns
+rows_per_country = df.groupby('Entity').size()
+nulls_per_country = df.groupby('Entity').apply(lambda x: x.isnull().sum())
 
 # store and print the countries where missing data from columns 'Daily tests','Cases','Deaths' are more than half country's data
-bad_data = 0
+remove = False
 countries_to_remove = []
 for i in range(0, 104):
     for j in range(12, 15):
-        # print("->", rows_per_country.values[i] - nulls_per_country.values[i][j])
         if (rows_per_country.values[i] - nulls_per_country.values[i][j]) < rows_per_country.values[i]/2:
-            bad_data = 1
-    if bad_data:
+            remove = True
+    if remove:
         countries_to_remove.append(nulls_per_country.index[i])
-        print("Country name: ", nulls_per_country.index[i], ",Total values: ", rows_per_country.values[i],
-              ",Nulls: Daily tests: ", nulls_per_country.values[i][12], ",Cases: ", nulls_per_country.values[i][13],
-              ",Deaths: ", nulls_per_country.values[i][14])
-        bad_data = 0
+        remove = False
 
 # remove from dataframe all countries found in the previous step
 for country_name in countries_to_remove:
-    df_filtered = df_filtered.drop(df_filtered.loc[df['Entity'] == country_name].index)
+    df = df.drop(df.loc[df['Entity'] == country_name].index)
 
-print("Number of null values in each column: ")
-print(df_filtered.isnull().sum())
+print("Removed Countries: ", countries_to_remove)
 
-# df_filtered.to_csv('clean_data.csv', index=False)
+# Get the number of null values in each column (daily tests, cases, deaths) of the cleared dataset
+nulls_in_df = df[['Daily tests', 'Cases', 'Deaths']].isnull().sum().values
+print("#Daily tests null values: ", nulls_in_df[0])
+print("#Cases null values: ", nulls_in_df[1])
+print("#Deaths null values: ", nulls_in_df[2])
 
-nulls_per_country = df_filtered.groupby('Entity').apply(lambda x: x.isnull().sum())
-print(nulls_per_country)
+# Removing all non common dates within the remaining countries
+# get the non common dates and remove them from the dataframe
 
-groups = df_filtered.groupby('Entity')
+df['Date'] = pd.to_datetime(df['Date'])
+dates = df.groupby('Date').size()
+unique_countries_number = df['Entity'].nunique()
 
-df_filtered[['Daily tests', 'Cases', 'Deaths']] = df_filtered[['Daily tests', 'Cases', 'Deaths']].interpolate(method='linear', limit_direction='forward')
-df_filtered[['Daily tests', 'Cases', 'Deaths']] = df_filtered[['Daily tests', 'Cases', 'Deaths']].round()
+outdates = []
+for i in range(0, len(dates)):
+    if dates.values[i] < unique_countries_number:
+        outdates.append(dates.index[i])
 
+mask = df['Date'].isin(outdates)
+df = df[~mask]
 
-# df_filtered['Cases'] = df_filtered['Cases'].interpolate(method='')
-# df_filtered.to_csv('interpolated_data.csv', index=False)
-# min-max scaling to data
-grouped_data = df_filtered.groupby('Entity')
-country_Hospital_beds_per1000 = grouped_data['Hospital beds per 1000 people'].first()
-country_doctors_per1000 = grouped_data['Medical doctors per 1000 people'].first()
-country_population = grouped_data['Population'].first()
-country_total_daily_tests = grouped_data['Daily tests'].sum()
-country_total_cases = grouped_data['Cases'].max()
-country_total_deaths = grouped_data['Deaths'].max()
-
-country_Hospital_beds = country_Hospital_beds_per1000*(country_population//1000)
-country_doctors = country_doctors_per1000*(country_population//1000)
-
-positivity_rate = country_total_cases/country_total_daily_tests
-death_rate = country_total_deaths/country_total_cases
-cases_population = country_total_cases/country_population
-beds_cases = country_Hospital_beds/country_total_cases
-doctors_cases = country_doctors/country_total_cases
-
-# get all percentages in a single Dataframe
-concatenated_percentages = pd.concat([positivity_rate, death_rate, cases_population, beds_cases, doctors_cases], axis=1)
-
-# print("Percentages: \n", concatenated_percentages)
-print(concatenated_percentages.shape)
-# print(type(concatenated_percentages))
-
-X = concatenated_percentages.iloc[:, :5]
-y = concatenated_percentages.index
-
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-minmax = MinMaxScaler()
-X_minmax = minmax.fit_transform(X_scaled)
-
-oversample = SMOTE()
-X_oversampled, y_oversampled = oversample.fit_resample(X_minmax, y)
-
-# print(X_oversampled)
-best_score = -1
-best_k = -1
-
-for k in range(2, 10):
-    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-    labels = kmeans.fit_predict(X_oversampled)
-    score = silhouette_score(X_oversampled, labels)
-    print("score: ", score, ", k=", k)
-    if score > best_score:
-        best_score = score
-        best_k = k
-
-print("best k", best_k)
-kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
-labels = kmeans.fit_predict(X_oversampled)
-
-print(labels)
-concatenated_percentages['Cluster'] = labels
-cluster_groups = concatenated_percentages.groupby('Cluster')
-print(concatenated_percentages)
-for name, group in cluster_groups:
-    print("Group:", name)
-    print(group)
-    print("\n")
+# Print the number of null values in each column
+nulls_in_df = df[['Daily tests', 'Cases', 'Deaths']].isnull().sum().values
+print("#Daily tests null values: ", nulls_in_df[0])
+print("#Cases null values: ", nulls_in_df[1])
+print("#Deaths null values: ", nulls_in_df[2])
 
 
-# SVM regressor
-df_filtered = df_filtered.loc[df_filtered['Entity'] == 'Greece'].copy()
-df_filtered.loc[:, 'positivity_rate'] = df_filtered['Cases']/df_filtered['Daily tests']
-print(df_filtered)
-df_filtered['Swifted positivity rate'] = df_filtered['positivity_rate'].shift(-3)
+# Plot Daily tests, Cases and Deaths through time to see what method of interpolation to use
+grouped_df = df.groupby(pd.Grouper(key='Date', freq='D')).agg({'Daily tests': 'sum'}).reset_index()
 
-df_filtered['Swifted positivity rate'] = df_filtered['Swifted positivity rate'].interpolate(method='linear', limit_direction='forward')
-df_filtered['Swifted positivity rate'] = df_filtered['Swifted positivity rate'].round()
-
-columns_to_scale = ['Latitude', 'Longitude', 'Average temperature per year', 'Hospital beds per 1000 people',
-                    'Medical doctors per 1000 people', 'GDP/Capita', 'Population', 'Median age', 'Population aged 65 and over (%)',
-                    'Daily tests', 'Cases', 'Deaths', 'Swifted positivity rate']
-df_filtered[columns_to_scale] = scaler.fit_transform(df_filtered[columns_to_scale])
-df_filtered[columns_to_scale] = minmax.fit_transform(df_filtered[columns_to_scale])
+plt.figure(figsize=(10, 6))
+plt.plot(grouped_df['Date'], grouped_df['Daily tests'], marker='o', linestyle='-')
+plt.xlabel('Date')
+plt.ylabel('Sum of Daily Tests')
+plt.title('Sum of Daily Tests over Time')
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
 
 
-# split the df_filtered into dates before and after 01-01-2021
-train_data = df_filtered[df_filtered['Date'] < '2021-01-01'].copy()
-test_data = df_filtered[df_filtered['Date'] >= '2021-01-01'].copy()
+grouped_df = df.groupby(pd.Grouper(key='Date', freq='D')).agg({'Cases': 'sum'}).reset_index()
 
-X_train = train_data[['Hospital beds per 1000 people', 'Medical doctors per 1000 people', 'Population', 'Median age',
-                      'Daily tests', 'Cases', 'Deaths']]
-y_train = train_data['Swifted positivity rate']
+plt.figure(figsize=(10, 6))
+plt.plot(grouped_df['Date'], grouped_df['Cases'], marker='o', linestyle='-')
+plt.xlabel('Date')
+plt.ylabel('Total Cases')
+plt.title('Total Cases over Timer')
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
 
-X_eval = test_data[['Hospital beds per 1000 people', 'Medical doctors per 1000 people', 'Population', 'Median age',
-                    'Daily tests', 'Cases', 'Deaths']]
-y_eval = test_data['Swifted positivity rate']
+grouped_df = df.groupby(pd.Grouper(key='Date', freq='D')).agg({'Deaths': 'sum'}).reset_index()
 
+plt.figure(figsize=(10, 6))
+plt.plot(grouped_df['Date'], grouped_df['Deaths'], marker='o', linestyle='-')
+plt.xlabel('Date')
+plt.ylabel('Total Deaths')
+plt.title('Total Deaths over Timer')
+plt.grid(True)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
 
-# create and train the SVM regressor
-svm_regressor = SVR()
+# We see that the data follow a curve, resembling a parabola, so we will use quadratic method to interpolate
+df[['Daily tests', 'Cases', 'Deaths']] = df[['Daily tests', 'Cases', 'Deaths']].interpolate(method='quadratic', limit_direction='forward')
 
-param_grid = {
-    'kernel': ['linear', 'rbf'],
-    'C': [0.1, 1, 10],
-    'gamma': ['scale', 'auto']
-}
+df[['Daily tests', 'Cases', 'Deaths']] = df[['Daily tests', 'Cases', 'Deaths']].fillna(method='ffill')
 
-# create the grid search object
-grid_search = GridSearchCV(svm_regressor, param_grid, scoring='neg_mean_squared_error', cv=5)
+nulls_in_df = df[['Daily tests', 'Cases', 'Deaths']].isnull().sum().values
+print("#Daily tests null values: ", nulls_in_df[0])
+print("#Cases null values: ", nulls_in_df[1])
+print("#Deaths null values: ", nulls_in_df[2])
 
-# fit the grid search to the training data
-grid_search.fit(X_train, y_train)
+# We can plot again a heatmap diagram to see if there has been any change between
+# the relationship of the variables after processing the data
 
-# get the best hyperparameters
-best_params = grid_search.best_params_
-print("Best hyperparameters: ", best_params)
+# **********************************************************************************************************************
 
-# get the best model
-# best_model = grid_search.best_estimator_
-# make predictions
-# predictions = best_model.predict(X_eval)
+# Clustering
 
-best_svm_regressor = SVR(**best_params)
-best_svm_regressor.fit(X_train, y_train)
+# Calculate the percentages we will use as features for clustering (Positivity rate, Death rate, Cases/Population)
+df['Summed tests'] = df.groupby('Entity')['Daily tests'].cumsum()
 
-y_pred = []
-for i in range(len(X_eval)):
-    # make predictions for a sample
-    X_sample = X_eval.iloc[[i]].values.reshape(1, -1)
-    y_sample = y_eval.iloc[i]
-    y_pred.append(best_svm_regressor.predict(X_sample))
+df_percentages = pd.DataFrame(columns=["Country", "Positivity Rate", "Death Rate", "Cases/Population"])
+grouped_data = df.groupby("Entity")
+for country, country_df in grouped_data:
+    country_total_cases = country_df["Cases"].iloc[-1]
+    country_total_deaths = country_df["Deaths"].iloc[-1]
+    country_total_daily_tests = country_df["Summed tests"].iloc[-1]
+    country_population = country_df["Population"].iloc[0]
 
-    # add the predicted sample to the training set
-    X_train = X_train.append(X_eval.loc[i], ignore_index=False)
-    y_train = y_train.append(y_eval.loc[i], ignore_index=False)
+    positivity_rate = country_total_cases / country_total_daily_tests
+    death_rate = country_total_deaths / country_total_cases
+    cases_population = country_total_cases / country_population
 
-    # retrain the SVM regressor
-    best_svm_regressor.fit(X_train, y_train)
+    df_percentages.loc[len(df_percentages) + 1] = [country, positivity_rate, death_rate, cases_population]
 
-print("predictions: ", y_pred)
-print("true values: ", y_eval)
+# Display the first 5 rows of the new dataframe
+print([["Starting Dataframe:"]])
+print(df_percentages.head())
 
-# evaluate the model
-mse = mean_squared_error(y_eval, y_pred)
-print("Mean Squared Error: ", mse)
+# For preprocessing the dataset we will use RobustScaler(), because it is robust to outliers as it uses the
+# interquartile range. After removing the outliers using RobustScaler(), we can use either StandardScaler() or
+# MinMaxScaler(). We will use MinMaxScaler() to also bring the data into [0,1] range.
+columns_to_scale = ["Positivity Rate", "Death Rate", "Cases/Population"]
+
+robust_scaler = RobustScaler()
+cluster_data = robust_scaler.fit_transform(df_percentages[columns_to_scale])
+df_percentages[columns_to_scale] = cluster_data
+print("Data after RobustScaler()\n:", df_percentages.head())
+
+minMax_scaler = MinMaxScaler()
+cluster_data = minMax_scaler.fit_transform(df_percentages[columns_to_scale])
+df_percentages[columns_to_scale] = cluster_data
+print("Data after MinMaxScaler():\n", df_percentages.head())
+
+# check again neighbors and best distance
+# After experimenting with different number of neighbors we define n_neighbors=4 as it has a smoother curve
+neighbors = NearestNeighbors(n_neighbors=4)
+neighbors.fit(cluster_data)
+distances, indices = neighbors.kneighbors(cluster_data)
+
+kDistances = distances[:, -1]
+sorted_KDistances = np.sort(kDistances)
+
+# Create the figure
+plt.figure(figsize=(10, 6))
+plt.plot(range(len(sorted_KDistances)), sorted_KDistances, linestyle='-', color='blue')
+plt.title('Density Reachability Plot')
+plt.xlabel('Data Points')
+plt.ylabel('4th Neighbor Distance')
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# We can see that a good distance is at point 75, with 4th Neighbor distance = 0.068 ~ 0.07 so we will use that as eps
+eps_neigh = 0.07
+
+# Minimum number of samples in a neighborhood to form a core point
+min_samples = 3
+
+dbscan = DBSCAN(eps=eps_neigh, min_samples=min_samples)
+clusters = dbscan.fit_predict(cluster_data)
+df_percentages['Cluster'] = clusters
+
+# Get the unique cluster labels
+unique_clusters = set(clusters)
+
+table = []
+for cluster in unique_clusters:
+    cluster_countries = df_percentages[df_percentages['Cluster'] == cluster]['Country']
+    table.append(["Cluster id : " + str(cluster) + " Number of Countries" + ":" + str(len(cluster_countries)), ', '.join(cluster_countries)])
+
+print("Table:\n", table)
+
+# Evaluate the model
+# The silhouette score is a measure of how similar an object is to its own cluster compared to other clusters.
+# The silhouette scores range from -1 to 1, where a higher value indicates that the object is better matched
+# to its own cluster, and worse matched to neighboring clusters.
+
+# Since we used DBSCAN we will need to exlude the noise points from the evaluation
+valid_cluster = clusters[clusters != -1]
+valid_data = df_percentages[df_percentages['Cluster'] != -1][['Positivity Rate', 'Death Rate', 'Cases/Population']].values
+silhouette_score = silhouette_score(valid_data, valid_cluster)
+print("Silhouette Score: ", silhouette_score)
