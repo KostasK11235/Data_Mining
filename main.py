@@ -2,10 +2,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from sklearn.preprocessing import RobustScaler, MinMaxScaler
+from sklearn.preprocessing import RobustScaler, MinMaxScaler, StandardScaler
 from sklearn.neighbors import NearestNeighbors
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, mean_squared_error
 from sklearn.cluster import DBSCAN
+from sklearn.model_selection import GridSearchCV
+from datetime import datetime
+from sklearn.svm import SVR
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+import regex as re
 
 # read data file
 df = pd.read_csv('data.csv')
@@ -242,8 +248,9 @@ df_percentages[columns_to_scale] = cluster_data
 print("Data after MinMaxScaler():\n", df_percentages.head())
 
 # check again neighbors and best distance
-# After experimenting with different number of neighbors we define n_neighbors=4 as it has a smoother curve
-neighbors = NearestNeighbors(n_neighbors=4)
+# After experimenting with different number of neighbors we define n_neighbors=2, as the elbow curve that occurs
+# gives an eps distance with better evaluation results from silhouette score
+neighbors = NearestNeighbors(n_neighbors=3)
 neighbors.fit(cluster_data)
 distances, indices = neighbors.kneighbors(cluster_data)
 
@@ -260,10 +267,10 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
-# We can see that a good distance is at point 75, with 4th Neighbor distance = 0.068 ~ 0.07 so we will use that as eps
-eps_neigh = 0.07
+# We can see that a good distance is at point 70, with kth Neighbor distance ~= 0.068, near the elbow point so we will use that as eps
+eps_neigh = 0.068
 
-# Minimum number of samples in a neighborhood to form a core point
+# Define the minimum number of samples that each core point must have in his neighborhood
 min_samples = 3
 
 dbscan = DBSCAN(eps=eps_neigh, min_samples=min_samples)
@@ -271,22 +278,142 @@ clusters = dbscan.fit_predict(cluster_data)
 df_percentages['Cluster'] = clusters
 
 # Get the unique cluster labels
-unique_clusters = set(clusters)
+formed_clusters = set(clusters)
 
-table = []
-for cluster in unique_clusters:
-    cluster_countries = df_percentages[df_percentages['Cluster'] == cluster]['Country']
-    table.append(["Cluster id : " + str(cluster) + " Number of Countries" + ":" + str(len(cluster_countries)), ', '.join(cluster_countries)])
+country_clusters = []
+for cluster in formed_clusters:
+    clustered_country = df_percentages[df_percentages['Cluster'] == cluster]['Country']
+    country_clusters.append(["Cluster id : " + str(cluster) + " Number of Countries" + ":" + str(len(clustered_country)), ', '.join(clustered_country)])
 
-print("Table:\n", table)
+print("Table:\n", country_clusters)
 
-# Evaluate the model
-# The silhouette score is a measure of how similar an object is to its own cluster compared to other clusters.
-# The silhouette scores range from -1 to 1, where a higher value indicates that the object is better matched
-# to its own cluster, and worse matched to neighboring clusters.
+# We will use silhouette score to evaluate the quality of the clusters.
+# Score near +1 indicates that the object is well-matched to its own cluster and poorly-matched to neighboring clusters.
+# Score near 0 indicates that the object is on or very close to the decision boundary between two neighboring clusters.
+# Score near -1 indicates that the object is better-matched to a neighboring cluster than to its own cluster.
+# In general, a higher silhouette score suggests that the clustering is appropriate and the clusters are well-defined and distinct
 
-# Since we used DBSCAN we will need to exlude the noise points from the evaluation
-valid_cluster = clusters[clusters != -1]
+# To evaluate the formed clusters we ignore the noise points
+valid_clusters = clusters[clusters != -1]
 valid_data = df_percentages[df_percentages['Cluster'] != -1][['Positivity Rate', 'Death Rate', 'Cases/Population']].values
-silhouette_score = silhouette_score(valid_data, valid_cluster)
+silhouette_score = silhouette_score(valid_data, valid_clusters)
 print("Silhouette Score: ", silhouette_score)
+
+# Assuming your df_percentages DataFrame contains columns 'Positivity Rate', 'Death Rate', and 'Cases/Population'
+filtered_df = df_percentages[df_percentages['Cluster'] != -1]
+x = filtered_df['Positivity Rate']
+y = filtered_df['Death Rate']
+z = filtered_df['Cases/Population']
+c = filtered_df['Cluster']
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+# Create the scatter plot
+scatter = ax.scatter(x, y, z, c=c, cmap='viridis')
+
+# Customize the plot
+ax.set_xlabel('Positivity Rate')
+ax.set_ylabel('Death Rate')
+ax.set_zlabel('Cases/Population')
+ax.set_title('Clustered Countries')
+
+# Add a color bar
+cbar = fig.colorbar(scatter)
+cbar.set_label('Cluster')
+
+plt.show()
+
+# **********************************************************************************************************************
+
+# SVR
+
+# We need only the data for Greece. First we choose only the records with entity Greece and then
+# convert into datetime column Date
+
+df_greece = df[df['Entity'] == 'Greece'].reset_index(drop=True)
+df_greece['Date'] = pd.to_datetime(df_greece['Date'])
+greece_population = df_greece['Population'].iloc[0]
+
+features_to_drop = ['Entity', 'Continent', 'Latitude', 'Longitude', 'Average temperature per year',
+                    'Hospital beds per 1000 people', 'Medical doctors per 1000 people', 'GDP/Capita',
+                    'Population', 'Median age', 'Population aged 65 and over (%)', 'Deaths', 'Summed tests']
+
+df_greece = df_greece.drop(features_to_drop, axis=1)
+print(df_greece)
+
+# we will convert the 'Date' column of the DataFrame to Unix timestamps
+starting_date = df_greece.loc[0, 'Date']
+df_greece['Days'] = (df_greece['Date'] - starting_date).dt.days
+df_greece['Timestamp'] = df_greece['Date'].values.astype(np.int64) // 10 ** 9
+df_greece[['Daily tests', 'Cases']] = df_greece[['Daily tests', 'Cases']].abs()
+df_greece['Positivity rate'] = df_greece['Cases'].diff() / df_greece['Daily tests']
+
+# we drop the first row, Date: 2020-03-30, because Date: 2020-03-31 is missing
+df_greece = df_greece.drop(0).reset_index(drop=True)
+
+# We plot the positivity rate in Greece through the dates in df_greece
+plt.figure(figsize=(12, 5))
+plt.plot(df_greece['Date'], df_greece['Positivity rate'])
+plt.title('Positivity rate in Greece though the registered dates')
+plt.xlabel('Date')
+plt.ylabel('Positivity Rate')
+plt.show()
+
+# To train the regressor we will use all the dates before 2021-01-01
+train_dates = df_greece[df_greece['Date'] < datetime(2021, 1, 1)]['Timestamp'].values.reshape(-1, 1)
+train_positivity = df_greece[df_greece['Date'] < datetime(2021, 1, 1)]['Positivity rate'].values.reshape(-1, 1)
+
+print(len(train_dates))
+print(len(train_positivity))
+
+scaler = StandardScaler()
+train_positivity_scaled = scaler.fit_transform(train_positivity)
+print(len(train_positivity_scaled))
+predicted_positivity = []
+
+# Predict the remaining values ( But the last three )
+remaining_dates = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Timestamp'][:-3]
+remaining_dates = remaining_dates.reset_index(drop=True)
+for today in remaining_dates:
+    train_dates = np.append(train_dates, today).reshape(-1, 1)
+    # Gather the positivity rate found today
+    train_positivity = np.append(train_positivity, df_greece[df_greece['Timestamp'] == today]['Positivity rate'].iloc[0])
+    train_positivity = train_positivity.reshape(-1, 1)
+
+    # Scale the new data
+    scaler = StandardScaler()
+    train_positivity_scaled = scaler.fit_transform(train_positivity)
+
+    # Create a new SVR model for each iteration and fit it with the training data
+    svr = SVR()
+    svr.fit(train_dates, train_positivity_scaled.ravel())
+
+    # calculate the timestamp for the prediction date (+3 days)
+    predict_ts = today + 3 * 24 * 60 * 60
+
+    # Predict the positivity rate for the prediction date
+    predicted_value_scaled = svr.predict([[predict_ts]])
+    predicted_value = scaler.inverse_transform(predicted_value_scaled.reshape(-1, 1))
+
+    # # Store the predicted value
+    predicted_positivity.append(predicted_value[0][0])
+
+# Calculate the MSE
+predicted_pos_rate_values = predicted_positivity[:-3]
+dates = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Date'][3:-3].to_list()
+real_pos_rate_values = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Positivity rate'][3:-3].to_list()
+mse = mean_squared_error(real_pos_rate_values, predicted_pos_rate_values)
+print('MSE: ', mse)
+print('Real values: ', real_pos_rate_values)
+print('Pred values: ', predicted_pos_rate_values)
+
+# # Plot the predicted values against the real values
+plt.figure(figsize=(12, 5))
+plt.plot(dates, predicted_pos_rate_values, label='Predicted Values')
+plt.plot(dates, real_pos_rate_values, label='Real Values')
+plt.title('Positivity Rate Prediction')
+plt.xlabel('Date')
+plt.ylabel('Positivity Rate')
+plt.legend()
+plt.show()
