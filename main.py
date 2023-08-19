@@ -389,6 +389,7 @@ train_positivity = df_greece[df_greece['Date'] < datetime(2021, 1, 1)]['Positivi
 
 scaler = StandardScaler()
 train_positivity_scaled = scaler.fit_transform(train_positivity)
+
 predicted_positivity = []
 
 model = SVR()
@@ -434,6 +435,77 @@ print('Pred values: ', predicted_pos_rate_values)
 # # Plot the predicted values against the real values
 plt.figure(figsize=(12, 5))
 plt.plot(dates, predicted_pos_rate_values, label='Predicted Values')
+plt.plot(dates, real_pos_rate_values, label='Real Values')
+plt.title('Positivity Rate Prediction')
+plt.xlabel('Date')
+plt.ylabel('Positivity Rate')
+plt.legend()
+plt.show()
+
+# RNN
+
+# We already have the train_dates and train_pos_rate, we just need to reshape them for the tensor
+reshaped_train_dates = np.reshape(train_dates, (train_dates.shape[0], train_dates.shape[1], 1))
+reshaped_train_positivity_scaled = np.reshape(train_positivity_scaled, (train_positivity_scaled.shape[0], train_positivity_scaled.shape[1], 1))
+
+# Create a Sequential model
+model = Sequential()
+
+# Add LSTM layers
+model.add(LSTM(units=70, input_shape=(train_dates.shape[1], 1)))
+model.add(Dense(units=1))  # Output layer
+
+# Compile the model
+model.compile(optimizer='adam', loss='mean_squared_error')
+
+history = model.fit(train_dates, train_positivity_scaled, epochs=16, batch_size=5)
+
+plt.figure(figsize=(6, 5))
+plt.plot(history.history['loss'])
+plt.title('Model Loss for Initial Training')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.show()
+
+rnn_predictions = []
+
+for today in remaining_dates:
+    # Gather the positivity rate found today
+    new_train_pos_rate = df_greece[df_greece['Timestamp'] == today]['Positivity rate'].iloc[0]
+
+    # Scale the new data
+    new_train_pos_rate_scaled = scaler.transform([[new_train_pos_rate]])
+
+    # LSTM requires the data to be in a specific format, 3d tensor
+    today_tensor = np.reshape(today, (1, 1, 1))
+    new_train_pos_rate_scaled = np.reshape(new_train_pos_rate_scaled, (1, 1, 1))
+
+    # Train the model with the new data
+    model.fit(today_tensor, new_train_pos_rate_scaled, epochs=16, batch_size=3)
+
+    # calculate the prediction date
+    predict_ts = today + 3 * 24 * 60 * 60
+    predict_ts = np.reshape(predict_ts, (1, 1, 1))
+
+    # Predict the positivity rate for the prediction date
+    predicted_value_scaled = model.predict(predict_ts, verbose=0)
+    predicted_value = scaler.inverse_transform(predicted_value_scaled.reshape(-1, 1))
+
+    # Store the predicted value
+    rnn_predictions.append(predicted_value[0][0])
+
+# Calculate the MSE
+rnn_predictions = rnn_predictions[:-3]
+dates = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Date'][3:-3].to_list()
+real_pos_rate_values = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Positivity rate'][3:-3].to_list()
+mse = mean_squared_error(real_pos_rate_values, rnn_predictions)
+print('MSE: ', mse)
+print('Real values: ', real_pos_rate_values)
+print('Pred values: ', rnn_predictions)
+
+# # Plot the predicted values against the real values
+plt.figure(figsize=(12, 5))
+plt.plot(dates, rnn_predictions, label='Predicted Values')
 plt.plot(dates, real_pos_rate_values, label='Real Values')
 plt.title('Positivity Rate Prediction')
 plt.xlabel('Date')
