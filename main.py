@@ -13,6 +13,17 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense
 import regex as re
 
+def findBestParameters(model, train_X, train_y):
+    parameters = {
+            'C':[1000, 100, 10, 1],
+            'epsilon': [0.1, 0.01, 0.05, 0.001],
+            'gamma': ['scale', 'auto']
+            }
+    clf = GridSearchCV(model, param_grid=parameters, cv=5)
+    clf.fit(train_X, train_y)
+
+    return SVR(C=clf.best_params_['C'], epsilon=clf.best_params_['epsilon'], gamma=clf.best_params_['gamma'])
+
 # read data file
 df = pd.read_csv('data.csv')
 
@@ -360,17 +371,29 @@ plt.xlabel('Date')
 plt.ylabel('Positivity Rate')
 plt.show()
 
+# drop dates >= 2021-02-24
+df_greece = df_greece[df_greece['Date'] < pd.to_datetime('2021-02-23')]
+print(df_greece)
+
+# We plot the positivity rate in Greece through the dates in df_greece
+plt.figure(figsize=(12, 5))
+plt.plot(df_greece['Date'], df_greece['Positivity rate'])
+plt.title('Positivity rate in Greece though the registered dates')
+plt.xlabel('Date')
+plt.ylabel('Positivity Rate')
+plt.show()
+
 # To train the regressor we will use all the dates before 2021-01-01
 train_dates = df_greece[df_greece['Date'] < datetime(2021, 1, 1)]['Timestamp'].values.reshape(-1, 1)
 train_positivity = df_greece[df_greece['Date'] < datetime(2021, 1, 1)]['Positivity rate'].values.reshape(-1, 1)
 
-print(len(train_dates))
-print(len(train_positivity))
-
 scaler = StandardScaler()
 train_positivity_scaled = scaler.fit_transform(train_positivity)
-print(len(train_positivity_scaled))
 predicted_positivity = []
+
+# model = SVR()
+# model = findBestParameters(model, train_dates, train_positivity_scaled.ravel())
+# model.fit(X_train, y_train)
 
 # Predict the remaining values ( But the last three )
 remaining_dates = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Timestamp'][:-3]
@@ -388,6 +411,7 @@ for today in remaining_dates:
     # Create a new SVR model for each iteration and fit it with the training data
     svr = SVR()
     svr.fit(train_dates, train_positivity_scaled.ravel())
+    # model.fit(train_dates, train_positivity_scaled.ravel())
 
     # calculate the timestamp for the prediction date (+3 days)
     predict_ts = today + 3 * 24 * 60 * 60
