@@ -15,9 +15,9 @@ import regex as re
 
 def findBestParameters(model, train_X, train_y):
     parameters = {
-            'C':[1000, 100, 10, 1],
+            'C':[0.0001, 0.001, 0.01, 1, 10, 20, 100],
             'epsilon': [0.1, 0.01, 0.05, 0.001],
-            'gamma': ['scale', 'auto']
+            'gamma': [0.0001, 0.001, 0.1, 1, 10, 100, 'scale', 'auto']
             }
     clf = GridSearchCV(model, param_grid=parameters, cv=5)
     clf.fit(train_X, train_y)
@@ -371,9 +371,9 @@ plt.xlabel('Date')
 plt.ylabel('Positivity Rate')
 plt.show()
 
-# drop dates >= 2021-02-24
+# drop dates >= 2021-02-24 and 2020-04-02
 df_greece = df_greece[df_greece['Date'] < pd.to_datetime('2021-02-23')]
-print(df_greece)
+df_greece = df_greece.drop(0).reset_index(drop=True)
 
 # We plot the positivity rate in Greece through the dates in df_greece
 plt.figure(figsize=(12, 5))
@@ -391,9 +391,8 @@ scaler = StandardScaler()
 train_positivity_scaled = scaler.fit_transform(train_positivity)
 predicted_positivity = []
 
-# model = SVR()
-# model = findBestParameters(model, train_dates, train_positivity_scaled.ravel())
-# model.fit(X_train, y_train)
+model = SVR()
+model = findBestParameters(model, train_dates, train_positivity_scaled.ravel())
 
 # Predict the remaining values ( But the last three )
 remaining_dates = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Timestamp'][:-3]
@@ -409,15 +408,15 @@ for today in remaining_dates:
     train_positivity_scaled = scaler.fit_transform(train_positivity)
 
     # Create a new SVR model for each iteration and fit it with the training data
-    svr = SVR()
-    svr.fit(train_dates, train_positivity_scaled.ravel())
-    # model.fit(train_dates, train_positivity_scaled.ravel())
+    #svr = SVR()
+    #svr.fit(train_dates, train_positivity_scaled.ravel())
+    model.fit(train_dates, train_positivity_scaled.ravel())
 
     # calculate the timestamp for the prediction date (+3 days)
     predict_ts = today + 3 * 24 * 60 * 60
 
     # Predict the positivity rate for the prediction date
-    predicted_value_scaled = svr.predict([[predict_ts]])
+    predicted_value_scaled = model.predict([[predict_ts]])
     predicted_value = scaler.inverse_transform(predicted_value_scaled.reshape(-1, 1))
 
     # # Store the predicted value
