@@ -11,7 +11,6 @@ from datetime import datetime
 from sklearn.svm import SVR
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
-import regex as re
 
 def findBestParameters(model, train_X, train_y):
     parameters = {
@@ -259,7 +258,7 @@ df_percentages[columns_to_scale] = cluster_data
 print("Data after MinMaxScaler():\n", df_percentages.head())
 
 # check again neighbors and best distance
-# After experimenting with different number of neighbors we define n_neighbors=2, as the elbow curve that occurs
+# After experimenting with different number of neighbors we define n_neighbors=3, as the elbow curve that occurs
 # gives an eps distance with better evaluation results from silhouette score
 neighbors = NearestNeighbors(n_neighbors=3)
 neighbors.fit(cluster_data)
@@ -273,7 +272,7 @@ plt.figure(figsize=(10, 6))
 plt.plot(range(len(sorted_KDistances)), sorted_KDistances, linestyle='-', color='blue')
 plt.title('Density Reachability Plot')
 plt.xlabel('Data Points')
-plt.ylabel('4th Neighbor Distance')
+plt.ylabel('3th Neighbor Distance')
 plt.grid(True)
 plt.tight_layout()
 plt.show()
@@ -458,11 +457,11 @@ model.add(Dense(units=1))  # Output layer
 # Compile the model
 model.compile(optimizer='adam', loss='mean_squared_error')
 
-history = model.fit(train_dates, train_positivity_scaled, epochs=16, batch_size=5)
+history = model.fit(train_dates, train_positivity_scaled, epochs=16, batch_size=3)
 
-plt.figure(figsize=(6, 5))
+plt.figure(figsize=(8, 5))
 plt.plot(history.history['loss'])
-plt.title('Model Loss for Initial Training')
+plt.title('Initial Training Loss')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
 plt.show()
@@ -470,24 +469,19 @@ plt.show()
 rnn_predictions = []
 
 for today in remaining_dates:
-    # Gather the positivity rate found today
-    new_train_pos_rate = df_greece[df_greece['Timestamp'] == today]['Positivity rate'].iloc[0]
+    new_positivity = df_greece[df_greece['Timestamp'] == today]['Positivity rate'].iloc[0]
+    new_positivity_scaled = scaler.transform([[new_positivity]])
 
-    # Scale the new data
-    new_train_pos_rate_scaled = scaler.transform([[new_train_pos_rate]])
-
-    # LSTM requires the data to be in a specific format, 3d tensor
+    # Format the data for LSTM and train the model
     today_tensor = np.reshape(today, (1, 1, 1))
-    new_train_pos_rate_scaled = np.reshape(new_train_pos_rate_scaled, (1, 1, 1))
+    new_positivity_scaled = np.reshape(new_positivity_scaled, (1, 1, 1))
 
-    # Train the model with the new data
-    model.fit(today_tensor, new_train_pos_rate_scaled, epochs=16, batch_size=3)
+    model.fit(today_tensor, new_positivity_scaled, epochs=16, batch_size=1)
 
-    # calculate the prediction date
     predict_ts = today + 3 * 24 * 60 * 60
     predict_ts = np.reshape(predict_ts, (1, 1, 1))
 
-    # Predict the positivity rate for the prediction date
+    # Predict the positivity rate for wanted dated
     predicted_value_scaled = model.predict(predict_ts, verbose=0)
     predicted_value = scaler.inverse_transform(predicted_value_scaled.reshape(-1, 1))
 
@@ -497,8 +491,8 @@ for today in remaining_dates:
 # Calculate the MSE
 rnn_predictions = rnn_predictions[:-3]
 dates = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Date'][3:-3].to_list()
-real_pos_rate_values = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Positivity rate'][3:-3].to_list()
-mse = mean_squared_error(real_pos_rate_values, rnn_predictions)
+real_positivity_values = df_greece[df_greece['Date'] >= datetime(2021, 1, 1)]['Positivity rate'][3:-3].to_list()
+mse = mean_squared_error(real_positivity_values, rnn_predictions)
 print('MSE: ', mse)
 print('Real values: ', real_pos_rate_values)
 print('Pred values: ', rnn_predictions)
@@ -507,7 +501,7 @@ print('Pred values: ', rnn_predictions)
 plt.figure(figsize=(12, 5))
 plt.plot(dates, rnn_predictions, label='Predicted Values')
 plt.plot(dates, real_pos_rate_values, label='Real Values')
-plt.title('Positivity Rate Prediction')
+plt.title('Predicted Positivity Rate')
 plt.xlabel('Date')
 plt.ylabel('Positivity Rate')
 plt.legend()
